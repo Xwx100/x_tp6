@@ -1,4 +1,5 @@
 ## 技术栈总览
+[有道云可视化链接](http://note.youdao.com/noteshare?id=98c5845f68cd8622346d275a2b93a221&sub=853987E023F8403EBE14600F3157CFA6)
 
 ### docker容器化
 1. 操作系统 `centos-8.*`
