@@ -9,7 +9,7 @@ namespace x_tp6\bases;
 use think\db\Query;
 
 /**
- * 1. 增加分表功能
+ * 1. 增加分表功能：哈希后缀分表、单值分表、混合分表策略
  * 2. 智能 增加 create_by update_by
  * 3. 智能 增加 create_at update_at
  * 4. 智能 增加 connection、table、schema、type
@@ -32,6 +32,7 @@ class Model extends \think\Model
      */
     public $subRuleKeys = [];
     public $subRuleName = 'columns';// columns-字段分表
+    public $subRuleOne = [];
 
     protected $createTime = 'create_at';
     protected $updateTime = 'update_at';
@@ -62,14 +63,14 @@ class Model extends \think\Model
     public static function onBeforeUpdate(Model $model)
     {
         self::updateBeforeUpdateBy($model);
-        self::makeSubTableSuffix($model, $model->getWhere());
+        self::makeSubTable($model, $model->getWhere());
     }
 
     public static function onBeforeInsert(Model $model)
     {
         self::insertBeforeCreateBy($model);
-        self::makeSubTableSuffix($model, $model->getData());
-        if ($model->getSuffix()) {
+        self::makeSubTable($model, $model->getWhere());
+        if (self::isSubTableColumns($model)) {
             self::insertBeforeCheckTable($model);
         }
     }
@@ -87,13 +88,13 @@ class Model extends \think\Model
     public static function onBeforeQuery(Query $query)
     {
         $model = $query->getModel();
-        if (is_subclass_of($model, self::class) && $model->changeTableObj && $model->changeTableObj->isSubTable) {
+        if (self::isSubTableColumns($model)) {
             // 分表查询 只支持简单条件查询
             $where = (array)$query->getOptions('where');
             if ($where && !empty($where['AND'])) {
                 $values = array_values($where['AND']);
                 $whereAnd = array_combine(array_column($values, 0), array_column($values, 2));
-                self::makeSubTableSuffix($model, $whereAnd);
+                self::makeSubTable($model, $whereAnd);
             }
             $query->table($model->getTable());
         }
@@ -101,48 +102,99 @@ class Model extends \think\Model
     }
 
     /**
+     * 判断 是否是 分表模式columns
+     * @param self $model
+     * @return bool
+     */
+    public static function isSubTableColumns($model): bool
+    {
+        return self::isSubTable($model) && $model->subRuleName === 'columns';
+    }
+
+    /**
+     * 判断 是否是 分表
+     * @param $model
+     * @return bool
+     */
+    public static function isSubTable($model): bool
+    {
+        $is = is_subclass_of($model, self::class);
+        $is = $is && $model->changeTableObj && $model->changeTableObj->isSubTable;
+        return $is;
+    }
+
+    /**
      * 获取 分表后缀
      *
      * @param Model $model
      * @param array $subData
-     * @return string
+     * @return null
      * @throws \Exception
      */
-    public static function makeSubTableSuffix(Model $model, array $subData)
+    public static function makeSubTable(Model $model, array $subData)
     {
-        if (!is_object($model->changeTableObj) || !$model->changeTableObj->isSubTable) {
-            return '';
-        }
-        if (empty($model->getSuffix())) {
-            // 自己定义 规则 命名方式如 subTable<subRuleName>
+        // 自己定义 规则 命名方式如 subTable<subRuleName>
+        if (self::isSubTable($model)) {
             $subNameStudly = x_app()->common->str()->studly($model->subRuleName);
             call_user_func_array(static::class . '::subTable' . $subNameStudly, [$model, $subData]);
         }
-        return $model->getSuffix();
+        return null;
     }
 
     /**
-     * 分表规则-columns
-     *
+     * 分表规则-columns: 后缀哈希分表策略
+     * [column, column]
      * @param Model $model
      * @param array $subData
      * @throws \Exception
      */
     public static function subTableColumns(Model $model, array $subData)
     {
-        // 默认规则 columns
-        if ($model->subRuleName === 'columns') {
-            if (empty($model->subRuleKeys)) {
-                x_app()->common->exception("分表规则:{$model->subRuleName} 还未设置keys");
-            }
-            $str = implode('_', x_app()->common->arr()->only($subData, $model->subRuleKeys));
-            if (empty($str)) {
-                x_app()->common->exception("分表规则:{$model->subRuleName} 数据维度错误");
-            }
-            $suffix = x_app()->common->subTable($str);
-            $model->setSuffix($suffix);
-        } else {
-            x_app()->common->exception("分表规则:{$model->subRuleName} 还未封装");
+        if (empty($model->subRuleKeys)) {
+            x_app()->common->exception("分表规则:{$model->subRuleName} 还未设置keys");
+        }
+        $str = implode('_', x_app()->common->arr()->only($subData, $model->subRuleKeys));
+        if (empty($str)) {
+            x_app()->common->exception("分表规则:{$model->subRuleName} 数据维度错误");
+        }
+        $suffix = x_app()->common->subTable($str);
+        $model->setSuffix($suffix);
+    }
+
+    /**
+     * 分表规则-one: 一值分表策略
+     * ['key' => 'origin', 'map' => ['houtai1' => '', 'houtai2' => '', 'houtai3' => '']]
+     * @param Model $model
+     * @param array $subData
+     */
+    public static function subTableOne(Model $model, array $subData) {
+        if (empty($model->subRuleOne)) {
+            x_app()->common->exception("分表规则:{$model->subRuleName} 还未设置keys");
+        }
+        $key = $model->subRuleOne['key'];
+        $table = $model->subRuleOne[$subData[$key]];
+        if (empty($table)) {
+            x_app()->common->exception("分表规则:{$model->subRuleName} 数据维度错误");
+        }
+        $model->table = $table;
+
+
+    }
+
+    /**
+     * 混合模式 1
+     * ['sort' => ['columns', 'one'], 'mixed_map' => 'houtai1']
+     * @param Model $model
+     * @param array $subData
+     */
+    public static function subTableMixed(Model $model, array $subData) {
+        if (empty($model->subRuleMixed)) {
+            x_app()->common->exception("分表规则:{$model->subRuleName} 还未设置keys");
+        }
+        self::subTableOne($model, $subData);
+        $mixedMap = x_app()->common->arr()->get($model->subRuleMixed, 'mixed_map');
+        if ($mixedMap === $model->table) {
+            self::subTableColumns($model, $subData);
         }
     }
 
@@ -176,9 +228,9 @@ class Model extends \think\Model
      * @param Model $model
      * @throws \think\db\exception\BindParamException
      */
-    public static function insertBeforeCheckTable(Model $model)
+    public static function insertBeforeCheckTable($model)
     {
-        if ($model->suffix) {
+        if (self::isSubTableColumns($model) && $model->suffix) {
             /**
              * @var $c \think\db\PDOConnection
              */

@@ -28,7 +28,6 @@ class User implements \app\rpc\interfaces\User
             $c--;
         }
 
-        var_dump(array_keys(iterator_to_array(app()->getIterator())));
 
         $wg->wait();
         echo 'end....';
